@@ -1,0 +1,235 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attendance Compliance Calendar</title>
+
+<style>
+body { font-family: Arial; padding:10px; background:#f2f2f2; }
+h3 { text-align:center; }
+
+.calendar {
+  display:grid;
+  grid-template-columns: repeat(7,1fr);
+  gap:5px;
+}
+
+.day-name { font-weight:bold; text-align:center; }
+
+.day {
+  padding:8px;
+  text-align:center;
+  border-radius:6px;
+  font-size:13px;
+}
+
+select {
+  width:100%;
+  font-size:11px;
+  margin-top:5px;
+}
+
+.weekday { background:#c8f7c5; }
+.weekend { background:#e0e0e0; }
+.inofc { background:#2ecc71; color:white; }
+.roster { background:#4da6ff; color:white; }
+.holiday { background:#ff4d4d; color:white; }
+.medical { background:#ff944d; color:white; }
+.casual { background:#b366ff; color:white; }
+.compoff { background:#ffd633; }
+
+.summary {
+  margin-top:20px;
+  padding:15px;
+  background:white;
+  border-radius:10px;
+  font-weight:bold;
+}
+
+.statusBox {
+  margin-top:10px;
+  padding:10px;
+  border-radius:8px;
+  text-align:center;
+  font-size:16px;
+  color:white;
+}
+</style>
+</head>
+
+<body>
+
+<h3 id="monthYear"></h3>
+<div class="calendar" id="calendar"></div>
+
+<div class="summary" id="summary"></div>
+
+<script>
+const calendar = document.getElementById("calendar");
+const monthYear = document.getElementById("monthYear");
+const summary = document.getElementById("summary");
+
+const now = new Date();
+const year = now.getFullYear();
+const month = now.getMonth();
+
+monthYear.innerText =
+  now.toLocaleString("default",{month:"long"}) + " " + year;
+
+const firstDay = new Date(year, month, 1).getDay();
+const daysInMonth = new Date(year, month+1, 0).getDate();
+
+const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+dayNames.forEach(d=>{
+  const div=document.createElement("div");
+  div.className="day-name";
+  div.innerText=d;
+  calendar.appendChild(div);
+});
+
+for(let i=0;i<firstDay;i++)
+  calendar.appendChild(document.createElement("div"));
+
+for(let d=1; d<=daysInMonth; d++){
+
+  const date = new Date(year,month,d);
+  const weekday = date.getDay();
+
+  const div=document.createElement("div");
+  div.classList.add("day");
+  div.dataset.day=d;
+  div.dataset.weekday=weekday;
+  div.innerHTML = d + "<br>";
+
+  if(weekday>=1 && weekday<=5)
+    div.classList.add("weekday");
+  else
+    div.classList.add("weekend");
+
+  const select=document.createElement("select");
+  select.innerHTML=`
+    <option value="default">Default</option>
+    <option value="inofc">In Office</option>
+    <option value="roster">Roster</option>
+    <option value="holiday">Public Holiday</option>
+    <option value="medical">Medical Leave</option>
+    <option value="casual">Casual Leave</option>
+  `;
+
+  select.onchange=function(){
+    updateDay(div,select.value);
+    calculateAttendance();
+  };
+
+  div.appendChild(select);
+  calendar.appendChild(div);
+}
+
+function updateDay(div,value){
+
+  const weekday=parseInt(div.dataset.weekday);
+  const dateNum=parseInt(div.dataset.day);
+
+  div.className="day";
+
+  if(value==="default"){
+    applyDefault(div,weekday);
+    resetCompoff();
+    return;
+  }
+
+  if(value==="roster"){
+    if(weekday!==0 && weekday!==6){
+      alert("Roster allowed only Saturday or Sunday");
+      div.querySelector("select").value="default";
+      applyDefault(div,weekday);
+      return;
+    }
+    div.classList.add("roster");
+    applyCompoffLogic(weekday,dateNum);
+    return;
+  }
+
+  div.classList.add(value);
+}
+
+function applyDefault(div,weekday){
+  if(weekday>=1 && weekday<=5)
+    div.classList.add("weekday");
+  else
+    div.classList.add("weekend");
+}
+
+function applyCompoffLogic(weekday,dateNum){
+  resetCompoff();
+
+  if(weekday===0) setCompoff(dateNum + 5);
+  if(weekday===6) setCompoff(dateNum - 5);
+}
+
+function setCompoff(targetDate){
+  document.querySelectorAll(".day").forEach(d=>{
+    if(parseInt(d.dataset.day)===targetDate){
+      d.className="day compoff";
+      d.querySelector("select").value="default";
+    }
+  });
+}
+
+function resetCompoff(){
+  document.querySelectorAll(".day").forEach(d=>{
+    if(d.classList.contains("compoff")){
+      const wd=parseInt(d.dataset.weekday);
+      d.className="day";
+      applyDefault(d,wd);
+    }
+  });
+}
+
+function calculateAttendance(){
+
+  let totalWorking=0;
+  let inOfficePresent=0;
+
+  document.querySelectorAll(".day").forEach(d=>{
+
+    const wd=parseInt(d.dataset.weekday);
+
+    if(wd>=1 && wd<=5 &&
+       !d.classList.contains("holiday") &&
+       !d.classList.contains("medical") &&
+       !d.classList.contains("casual") &&
+       !d.classList.contains("compoff")){
+
+        totalWorking++;
+
+        if(d.classList.contains("inofc"))
+          inOfficePresent++;
+    }
+  });
+
+  const inOfficeRequired = Math.round(totalWorking * 0.6);
+
+  let compliance = inOfficeRequired === 0 ? 0 :
+    Math.round((inOfficePresent / inOfficeRequired) * 100);
+
+  let boxColor="red";
+  if(compliance>=81) boxColor="green";
+  else if(compliance>=41) boxColor="#f1c40f";
+  else if(compliance>=21) boxColor="orange";
+
+  summary.innerHTML = `
+    Total Working Days: ${totalWorking}<br>
+    In Office Required (60%): ${inOfficeRequired}<br>
+    In Office Present: ${inOfficePresent}
+    <div class="statusBox" style="background:${boxColor};">
+      Compliance: ${compliance}%
+    </div>
+  `;
+}
+
+calculateAttendance();
+</script>
+
+</body>
+</html>
