@@ -1,0 +1,371 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>In Office Attendance Tracker</title>
+
+<style>
+body{
+  font-family: Arial;
+  background:#f4f4f4;
+  padding:10px;
+}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+  background:white;
+}
+
+th,td{
+  border:1px solid #ccc;
+  text-align:center;
+  vertical-align:top;
+  padding:4px;
+  font-size:12px;
+}
+
+select{
+  width:100%;
+  font-size:11px;
+}
+
+/* Status Colors */
+.working{ background:#83f295; }     /* Light green */
+.inoffice{ background:#ffcccc; }    
+.roster{ background:#cce5ff; }
+.comp{ background:yellow; }
+.ph{ background:#d3d3d3; }
+.ml{ background:#ffb3ff; }
+.cl{ background:#99ffcc; }
+
+.summary{
+  margin-top:15px;
+  background:white;
+  padding:10px;
+  border-radius:6px;
+}
+
+.heatbox{
+  padding:8px;
+  color:white;
+  border-radius:6px;
+  margin-top:8px;
+}
+
+.nav{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:10px;
+}
+
+.status-bar {
+  text-align: center;
+  font-size: 11px;
+  color: #333;
+  background: #e2eafc;
+  padding: 6px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  font-weight: bold;
+  border: 1px solid #b6ccfe;
+}
+</style>
+</head>
+
+<body>
+
+<div id="cloudStatus" class="status-bar">Connecting to Cloud Database...</div>
+
+<div class="nav">
+  <button onclick="changeMonth(-1)">◀ Prev</button>
+  <h2 id="monthTitle"></h2>
+  <button onclick="changeMonth(1)">Next ▶</button>
+</div>
+
+<table id="calendar"></table>
+
+<div class="summary" id="summary"></div>
+
+<h3 style="margin-top:20px;">Monthly Heatmap</h3>
+<table>
+<thead>
+<tr>
+<th>Month</th>
+<th>Compliance %</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody id="heatmapBody"></tbody>
+</table>
+
+<script>
+// ⚠️ PASTE YOUR NATIVE COPIED FIREBASE REALTIME DATABASE URL HERE
+const FIREBASE_DB_URL = "https://my-calendar-dc01f-default-rtdb.firebaseio.com/";
+
+const now = new Date();
+let year = now.getFullYear();
+let month = now.getMonth();
+
+const calendar = document.getElementById("calendar");
+const summary = document.getElementById("summary");
+
+// Holds the local synchronized data parsed from the database stream
+let globalCloudData = {};
+
+// Begin core startup loop sequence
+loadMasterDataFromFirebase();
+
+function updateMonthTitle(){
+  const monthName = new Date(year, month)
+    .toLocaleString("default",{month:"long"});
+  document.getElementById("monthTitle").innerText =
+    monthName + " " + year;
+}
+
+function changeMonth(direction){
+  month += direction;
+
+  if(month > 11){
+    month = 0;
+    year++;
+  }
+  if(month < 0){
+    month = 11;
+    year--;
+  }
+
+  generateCalendar();
+}
+
+async function loadMasterDataFromFirebase() {
+  if (FIREBASE_DB_URL.includes("your-project-id")) {
+    document.getElementById("cloudStatus").innerText = "⚠️ Setup Alert: Insert your database URL inside the code script.";
+    generateCalendar();
+    return;
+  }
+
+  try {
+    document.getElementById("cloudStatus").innerText = "🔄 Pulling schedules from Firebase...";
+    const response = await fetch(`${FIREBASE_DB_URL}attendance_vault.json`);
+    const data = await response.json();
+    if (data) {
+      globalCloudData = data;
+    }
+    document.getElementById("cloudStatus").innerText = "✅ Cloud Backup Synchronized";
+  } catch (error) {
+    document.getElementById("cloudStatus").innerText = "⚠️ Network Offline (Operating via local session mirror)";
+    console.error(error);
+  }
+  
+  generateCalendar();
+}
+
+function generateCalendar(){
+  updateMonthTitle();
+  calendar.innerHTML="";
+
+  const firstDay = new Date(year,month,1).getDay();
+  const daysInMonth = new Date(year,month+1,0).getDate();
+
+  let header = document.createElement("tr");
+  ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].forEach(d=>{
+    header.innerHTML += `<th>${d}</th>`;
+  });
+  calendar.appendChild(header);
+
+  let row=document.createElement("tr");
+
+  for(let i=0;i<firstDay;i++){
+    row.appendChild(document.createElement("td"));
+  }
+
+  for(let day=1;day<=daysInMonth;day++){
+    if((firstDay+day-1)%7===0 && day!==1){
+      calendar.appendChild(row);
+      row=document.createElement("tr");
+    }
+
+    let cell=document.createElement("td");
+    let select=document.createElement("select");
+    select.innerHTML=`
+      <option value="">--</option>
+      <option value="working">Working Day</option>
+      <option value="inoffice">In Office</option>
+      <option value="roster">Roster</option>
+      <option value="comp">CompOff</option>
+      <option value="ph">Public Holiday</option>
+      <option value="ml">Medical Leave</option>
+      <option value="cl">Casual Leave</option>
+    `;
+
+    select.onchange=function(){
+      applyColor(cell,this.value);
+      autoCompOff(day,this.value);
+      calculateAttendance();
+    };
+
+    cell.innerHTML=`<div>${day}</div>`;
+    cell.appendChild(select);
+    row.appendChild(cell);
+  }
+
+  calendar.appendChild(row);
+
+  const key=`attendance_${year}_${month}`;
+  if(globalCloudData[key]){
+    loadMonthData();
+  } else {
+    setDefaultWorkingDays();
+  }
+
+  calculateAttendance();
+}
+
+function setDefaultWorkingDays(){
+  let selects=document.querySelectorAll("select");
+  selects.forEach((sel,i)=>{
+    let day=i+1;
+    let date=new Date(year,month,day);
+    let weekday=date.getDay();
+
+    if(weekday>=1 && weekday<=5){
+      sel.value="working";
+      applyColor(sel.parentElement,"working");
+    }
+  });
+}
+
+function applyColor(cell,value){
+  cell.className="";
+  if(value) cell.classList.add(value);
+}
+
+function autoCompOff(day,value){
+  if(value!=="roster") return;
+  let date=new Date(year,month,day);
+  let weekday=date.getDay();
+
+  if(weekday===0){ 
+    markComp(day+5);
+  }
+  if(weekday===6){ 
+    markComp(day-5);
+  }
+}
+
+function markComp(day){
+  let selects=document.querySelectorAll("select");
+  selects.forEach((sel,i)=>{
+    if(i+1===day){
+      sel.value="comp";
+      applyColor(sel.parentElement,"comp");
+    }
+  });
+}
+
+function calculateAttendance(){
+  let selects=document.querySelectorAll("select");
+  let totalWorking=0;
+  let inOfficePresent=0;
+
+  selects.forEach((sel,i)=>{
+    let day=i+1;
+    let date=new Date(year,month,day);
+    let weekday=date.getDay();
+
+    if(weekday>=1 && weekday<=5){
+      if(sel.value==="working" || sel.value==="inoffice"){
+        totalWorking++;
+      }
+      if(sel.value==="inoffice"){
+        inOfficePresent++;
+      }
+    }
+  });
+
+  let inOfficeRequired=Math.round(totalWorking*0.6);
+  let compliance=inOfficeRequired===0 ? 0 : Math.round((inOfficePresent/inOfficeRequired)*100);
+
+  let color="red";
+  if(compliance>=90) color="green";
+  else if(compliance>=41) color="#f1c40f";
+  else if(compliance>=21) color="orange";
+
+  summary.innerHTML=`
+    <p><b>Total Working Days:</b> ${totalWorking}</p>
+    <p><b>In Office Required (60%):</b> ${inOfficeRequired}</p>
+    <p><b>In Office Present:</b> ${inOfficePresent}</p>
+    <div class="heatbox" style="background:${color}">
+      Compliance: ${compliance}%
+    </div>
+  `;
+
+  saveMonthDataToFirebase(totalWorking,inOfficeRequired,inOfficePresent,compliance,color);
+}
+
+async function saveMonthDataToFirebase(total,req,pres,comp,color){
+  const key=`attendance_${year}_${month}`;
+
+  const monthRecord={
+    monthName: new Date(year,month).toLocaleString("default",{month:"short"})+" "+year,
+    total,req,pres,comp,color,
+    selections:[...document.querySelectorAll("select")].map(s=>s.value)
+  };
+
+  globalCloudData[key] = monthRecord;
+  loadHeatmap();
+
+  if (FIREBASE_DB_URL.includes("your-project-id")) return;
+
+  document.getElementById("cloudStatus").innerText = "💾 Pushing updates to Firebase...";
+  try {
+    await fetch(`${FIREBASE_DB_URL}attendance_vault/${key}.json`, {
+      method: "PUT",
+      body: JSON.stringify(monthRecord),
+      headers: { "Content-Type": "application/json" }
+    });
+    document.getElementById("cloudStatus").innerText = "✅ Cloud Backup Synchronized";
+  } catch (error) {
+    document.getElementById("cloudStatus").innerText = "⚠️ Network Delay. Change cached locally.";
+    console.error(error);
+  }
+}
+
+function loadMonthData(){
+  const key=`attendance_${year}_${month}`;
+  const data = globalCloudData[key];
+  if(!data || !data.selections) return;
+
+  const selects=document.querySelectorAll("select");
+  data.selections.forEach((val,i)=>{
+    if(selects[i]){
+      selects[i].value=val;
+      applyColor(selects[i].parentElement,val);
+    }
+  });
+}
+
+function loadHeatmap(){
+  let body=document.getElementById("heatmapBody");
+  body.innerHTML="";
+
+  Object.keys(globalCloudData).sort().forEach(key => {
+    let data = globalCloudData[key];
+    if(data && data.monthName) {
+      body.innerHTML+=`
+        <tr>
+          <td>${data.monthName}</td>
+          <td>${data.comp}%</td>
+          <td style="background:${data.color};color:white;font-weight:bold;">
+            ${data.comp}%
+          </td>
+        </tr>
+      `;
+    }
+  });
+}
+</script>
+</body>
+</html>
